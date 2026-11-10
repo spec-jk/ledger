@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="ko">
-<!-- LEDGER 앱버전 — node build-pwa.js로 만든 파일 1.0.0+40d61c70 -->
+<!-- LEDGER 앱버전 — node build-pwa.js로 만든 파일 1.0.0+7591ed69 -->
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -245,6 +245,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .acct-row .info { flex: 1; min-width: 0; }
 .acct-row .name { font-weight: 600; }
 .acct-row .kind { font-size: 12px; color: var(--muted); margin-left: 4px; font-weight: 400; }
+.acct-row .owners { margin-left: 6px; } /* 주인 이름표 (18장) */
 .acct-row .meta { font-size: 12px; color: var(--muted); }
 .acct-row .bal { flex: none; font-weight: 700; font-variant-numeric: tabular-nums; }
 .acct-row .bal.neg { color: var(--expense); }
@@ -1027,6 +1028,21 @@ function fillMemberFilter(sel, allLabel) {
 }
 // 결제수단을 이 사용자가 쓰는지 (쓰는 사람이 비어 있으면 모두가 씀)
 const accountUsedBy = (a, memberId) => !a.members || !a.members.length || a.members.includes(memberId);
+// 결제수단 주인 이름: 쓰는 사람이 정해져 있으면 「엄마·아빠」, 모두가 쓰면 '' (18장)
+function acctOwners(a) {
+  return (a.members || []).map((id) => memberById(id)).filter(Boolean).map((m) => m.name).join('·');
+}
+// 「신한 (엄마)」처럼 이름 + 주인 — 같은 은행·카드라도 누구 것인지 보이게
+function acctLabel(a) {
+  const who = acctOwners(a);
+  return who ? `${a.name} (${who})` : a.name;
+}
+// 사이드바 계좌·카드 줄의 주인 이름표 (사용자 색)
+function ownerTags(a) {
+  const tags = (a.members || []).map((id) => memberById(id)).filter(Boolean).map((m) =>
+    `<span class="who" style="background:var(--c-${m.color || 'gray'}-bg);color:var(--c-${m.color || 'gray'}-text)">${escapeHtml(m.name)}</span>`).join('');
+  return tags ? `<span class="owners">${tags}</span>` : '';
+}
 // 사용자 이름표 (사용자 색)
 function memberTag(t) {
   const m = t.member && memberById(t.member);
@@ -1376,7 +1392,7 @@ function renderSidebar() {
     }
     html += `<button type="button" class="acct-row" data-id="${escapeHtml(a.id)}">` +
       `<span class="acct-dot" style="background:var(--c-${a.color || 'gray'}-strong)"></span>` +
-      `<div class="info"><div class="name">${escapeHtml(a.name)}<span class="kind">${KIND_LABEL[a.kind] || ''}</span></div>` +
+      `<div class="info"><div class="name">${escapeHtml(a.name)}<span class="kind">${KIND_LABEL[a.kind] || ''}</span>${ownerTags(a)}</div>` +
       (meta ? `<div class="meta num">${meta}</div>` : '') + `</div>${right}</button>`;
   }
   body.innerHTML = html;
@@ -1680,7 +1696,7 @@ function fillListSelects() {
   };
   catSel.innerHTML = opt('', '전체 분류') + group('expense', '지출') + group('income', '수입');
   accSel.innerHTML = opt('', '전체 결제수단') +
-    state.data.accounts.map((a) => opt(a.id, a.name + (a.hidden ? ' (숨김)' : ''))).join('');
+    state.data.accounts.map((a) => opt(a.id, acctLabel(a) + (a.hidden ? ' (숨김)' : ''))).join(''); // 「신한 (엄마)」
   if (!['@expense', '@income'].includes(L.category) && !state.data.categories.some((c) => c.id === L.category)) L.category = '';
   if (!state.data.accounts.some((a) => a.id === L.account)) L.account = '';
   catSel.value = L.category;
@@ -1799,21 +1815,21 @@ function accountsFor(type, keepIds = []) {
     ACCOUNT_KINDS[type].includes(a.kind) && (!a.hidden || keepIds.includes(a.id)));
 }
 
-// 결제수단 고르기 칸 채우기. grouped면 고른 사용자가 쓰는 것 먼저, 나머지는 '다른 결제수단' 묶음 (18장)
-function fillSelect(sel, list, wanted, grouped = false) {
+// 결제수단 고르기 칸 채우기 (18장)
+// byMember면 고른 사용자가 쓰는 것(+ 모두가 쓰는 것)만. 공동이면 전부. 고치는 거래가 원래 쓰던 결제수단(keepIds)은 늘 보임.
+function fillSelect(sel, list, wanted, byMember = false, keepIds = []) {
   sel.innerHTML = '';
-  const option = (a) => { const o = document.createElement('option'); o.value = a.id; o.textContent = a.name; return o; };
-  let mine = list, others = [];
-  if (grouped && txm.member) {
-    mine = list.filter((a) => accountUsedBy(a, txm.member));
-    others = list.filter((a) => !accountUsedBy(a, txm.member));
+  if (byMember && txm.member) list = list.filter((a) => accountUsedBy(a, txm.member) || keepIds.includes(a.id));
+  for (const a of list) {
+    const o = document.createElement('option');
+    o.value = a.id; o.textContent = acctLabel(a);
+    sel.appendChild(o);
   }
-  mine.forEach((a) => sel.appendChild(option(a)));
-  if (others.length) {
-    const g = document.createElement('optgroup');
-    g.label = '다른 결제수단';
-    others.forEach((a) => g.appendChild(option(a)));
-    sel.appendChild(g);
+  if (!list.length) {
+    const o = document.createElement('option');
+    o.value = ''; o.textContent = '이 사용자의 결제수단이 없습니다'; o.disabled = true;
+    sel.appendChild(o); sel.value = '';
+    return;
   }
   if (list.some((a) => a.id === wanted)) sel.value = wanted;
 }
@@ -1839,11 +1855,13 @@ function renderMemberPick() {
   }
 }
 
-// 사용자가 바뀌면 결제수단 순서만 다시 (고른 결제수단은 유지)
+// 사용자가 바뀌면 그 사용자의 결제수단으로 다시 채움 (고른 결제수단이 남아 있으면 유지, 없으면 첫 번째)
+// 이체는 보내는 계좌만 거름, 받는 계좌는 가족 누구 것이든 고를 수 있게 그대로
 function refillAccounts() {
   const o = txm.original || {};
-  if (txm.type === 'transfer') fillSelect($('#txFrom'), accountsFor('transfer', [o.account, o.to]), $('#txFrom').value, true);
-  else fillSelect($('#txAccount'), accountsFor(txm.type, [o.account]), $('#txAccount').value, true);
+  if (txm.type === 'transfer') fillSelect($('#txFrom'), accountsFor('transfer', [o.account, o.to]), $('#txFrom').value, true, [o.account]);
+  else fillSelect($('#txAccount'), accountsFor(txm.type, [o.account]), $('#txAccount').value, true, [o.account]);
+  updateRepeatUI(); // 카드가 바뀌면 할부 칸도
 }
 
 // 결제수단을 바꿨는데 고른 사용자가 그 결제수단을 쓰지 않으면 첫 번째 쓰는 사람으로 (공동이면 그대로)
@@ -1905,11 +1923,11 @@ function setTxType(type) {
   const o = txm.original || {};
   if (isTransfer) {
     const list = accountsFor('transfer', [o.account, o.to]);
-    fillSelect($('#txFrom'), list, prevAccount, true);
+    fillSelect($('#txFrom'), list, prevAccount, true, [o.account]);
     const other = list.find((a) => a.id !== $('#txFrom').value);
     fillSelect($('#txTo'), list, o.type === 'transfer' ? o.to : other && other.id);
   } else {
-    fillSelect($('#txAccount'), accountsFor(type, [o.account]), prevAccount, true);
+    fillSelect($('#txAccount'), accountsFor(type, [o.account]), prevAccount, true, [o.account]);
     renderCategoryGrid();
   }
   updateRepeatUI();
@@ -2129,6 +2147,9 @@ async function saveTx() {
   if (!date) return showTxError('날짜를 골라 주세요.');
   const account = type === 'transfer' ? $('#txFrom').value : $('#txAccount').value;
   const to = $('#txTo').value;
+  // 고른 사용자의 결제수단이 하나도 없으면 칸이 비어 있음
+  if (!account) return showTxError(type === 'transfer' ? '보내는 계좌를 골라 주세요.' : '결제수단을 골라 주세요. (⚙ 설정 > 계좌·카드에서 쓰는 사람을 체크하거나 + 결제수단 추가)');
+  if (type === 'transfer' && !to) return showTxError('받는 계좌를 골라 주세요.');
   if (type === 'transfer' && account === to) return showTxError('보내는 계좌와 받는 계좌가 같습니다.');
   const rule = readRepeat();
   if (rule) {
@@ -3016,14 +3037,16 @@ function finishQuickAdd(id) {
   else if (kind === 'members') { txm.member = id; renderMemberPick(); refillAccounts(); }
   else if (kind === 'accounts') {
     const o = txm.original || {};
+    // 쓰는 사람에서 고른 사용자를 뺐으면, 새 결제수단의 첫 번째 쓰는 사람으로 바꿔야 목록에 보임
+    const a = acctById(id);
+    if (target !== 'to' && a && txm.member && !accountUsedBy(a, txm.member)) { txm.member = a.members[0]; renderMemberPick(); }
     if (txm.type === 'transfer') {
       const list = accountsFor('transfer', [o.account, o.to]);
       const from = $('#txFrom').value, to = $('#txTo').value;
-      fillSelect($('#txFrom'), list, target === 'from' ? id : from, true);
+      fillSelect($('#txFrom'), list, target === 'from' ? id : from, true, [o.account]);
       fillSelect($('#txTo'), list, target === 'from' ? to : id);
     } else {
-      fillSelect($('#txAccount'), accountsFor(txm.type, [o.account]), id, true);
-      adjustMemberForAccount(id);
+      fillSelect($('#txAccount'), accountsFor(txm.type, [o.account]), id, true, [o.account]);
     }
     updateRepeatUI();
   }
@@ -3082,7 +3105,9 @@ function accountsPanelHtml() {
   }).join('');
   let editor = '';
   if (setm.editing) {
-    const a = setm.id ? acctById(setm.id) : { name: '', kind: 'bank', opening: 0, members: [], hidden: false };
+    // 거래 입력창의 「+ 결제수단 추가」면 고른 사용자를 쓰는 사람으로 미리 체크 (받는 계좌는 가족 누구 것일 수 있어 비워 둠)
+    const preMember = setm.quick && setm.quick.target !== 'to' && txm.member ? [txm.member] : [];
+    const a = setm.id ? acctById(setm.id) : { name: '', kind: 'bank', opening: 0, members: preMember, hidden: false };
     const used = setm.id ? accountUse(setm.id) > 0 : false;
     const card = a.card || { cutoffDay: 31, paymentDay: 14, payFrom: '' };
     const banks = state.data.accounts.filter((x) => x.kind === 'bank' && x.id !== a.id && (!x.hidden || x.id === card.payFrom));
