@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="ko">
-<!-- LEDGER 앱버전 — node build-pwa.js로 만든 파일 1.0.0+ca003562 -->
+<!-- LEDGER 앱버전 — node build-pwa.js로 만든 파일 1.0.0+b15cf752 -->
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -324,8 +324,6 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .weekday-btn.selected { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
 #txRepeatRow select:disabled, #txInstallRow select:disabled { background: var(--bg); color: var(--muted); }
 .scope-modal { width: 320px; }
-.exit-modal { width: 320px; } /* 종료 확인 (20장) */
-.exit-modal .hint { margin: 0; }
 .scope-modal .modal-body { gap: 8px; }
 .scope-btn { width: 100%; padding: 10px 12px; text-align: left; }
 
@@ -795,19 +793,6 @@ button, input, select, textarea { font: inherit; color: inherit; }
     </div>
   </div>
 
-  <!-- 달력 탭에서 뒤로가기: 종료 확인 (20장) -->
-  <div class="modal-backdrop" id="exitModal" hidden>
-    <div class="modal exit-modal" role="dialog" aria-modal="true" aria-labelledby="exitTitle">
-      <div class="modal-head"><h2 id="exitTitle">LEDGER를 종료할까요?</h2></div>
-      <div class="modal-body"><p class="hint" id="exitHint">뒤로가기를 한 번 더 눌러도 종료됩니다.</p></div>
-      <div class="modal-foot">
-        <div class="spacer"></div>
-        <button type="button" class="text-btn" id="exitStay">계속 쓰기</button>
-        <button type="button" class="primary-btn" id="exitQuit">종료</button>
-      </div>
-    </div>
-  </div>
-
   <!-- 알림 -->
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
@@ -995,12 +980,12 @@ function sortTransactions(list) {
 
 // ---------- 알림 ----------
 let toastTimer = null;
-function toast(msg) {
+function toast(msg, ms) {
   const el = $('#toast');
   el.textContent = msg;
   el.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 4000 + 1500 * (msg.split('\n').length - 1)); // 줄이 많으면 더 오래
+  toastTimer = setTimeout(() => el.classList.remove('show'), ms || 4000 + 1500 * (msg.split('\n').length - 1)); // 줄이 많으면 더 오래
 }
 
 // ---------- 그리기 ----------
@@ -1520,7 +1505,8 @@ mobileMq.addEventListener('change', () => { closeSheet(); renderSidebar(); });
 
 // ---------- 뒤로가기 (20장) ----------
 // 방문 기록에 「막이」 칸을 넣어 두고, 휴대폰 뒤로가기로 그 칸이 빠지면(popstate)
-//   ① 팝업이 있으면 맨 위 하나만 닫음  ② 목록·통계 탭이면 달력 탭으로  ③ 달력 탭이면 종료 확인 창
+//   ① 팝업이 있으면 맨 위 하나만 닫음  ② 목록·통계 탭이면 달력 탭으로
+//   ③ 달력 탭이면 아래에 「뒤로가기를 한 번 더 누르면 종료됩니다」 → 한 번 더 누르면 앱이 닫힘 (은행 앱처럼)
 // ※ 안드로이드 크롬 규칙: 화면을 누르지 않은 채 넣은 기록 칸은 뒤로가기 버튼이 건너뛴다(그래서 앱이 바로 꺼졌음).
 //   → 막이 칸은 사용자가 화면을 누를 때(누름 처리 안)만 넣는다. 연달아 누를 수 있게 늘 3칸까지 채워 둔다.
 const GUARD_DEPTH = 3;
@@ -1532,12 +1518,13 @@ function topLayer() {
   if (sheetOpen()) return 'sheet';                // 휴대폰 아래 창
   return null;
 }
-let exitAsking = false;  // 종료 확인 창이 떠 있는 동안: 막이 칸 없음 → 뒤로가기 한 번 더면 실제로 종료
-let goingToStart = false; // 종료 확인 때 남은 막이 칸을 스스로 빼는 중 (그때 생기는 popstate는 무시)
+let exitArmed = false;    // 「한 번 더 누르면 종료」 상태: 막이 칸 없음 → 뒤로가기 한 번 더면 실제로 종료
+let goingToStart = false; // 그때 남은 막이 칸을 스스로 빼는 중 (그때 생기는 popstate는 무시)
 const guardLevel = () => (history.state && history.state.ledgerLayer) || 0;
 function topUpGuards(e) {
   // 사람이 실제로 누른 것만 (코드가 대신 누른 click은 크롬이 인정하지 않아 오히려 건너뛰기 표시가 붙음)
-  if ((e && !e.isTrusted) || exitAsking || goingToStart) return;
+  if ((e && !e.isTrusted) || goingToStart) return;
+  exitArmed = false; // 화면을 누르면 종료 대기는 풀고 막이 칸을 다시 채움
   try {
     for (let k = guardLevel(); k < GUARD_DEPTH; k++) history.pushState({ ledgerLayer: k + 1 }, '');
   } catch { /* 방문 기록을 못 쓰는 곳(구글 웹앱 틀 안 등)에서는 그냥 둠 */ }
@@ -1546,7 +1533,7 @@ function topUpGuards(e) {
 for (const ev of ['click', 'pointerup', 'keydown']) document.addEventListener(ev, topUpGuards, true);
 window.addEventListener('popstate', () => {
   if (goingToStart) { if (guardLevel() === 0) goingToStart = false; return; }
-  if (exitAsking) return;
+  if (exitArmed) return;
   const top = topLayer();
   if (top === 'scope') $('#scopeCancel').click();
   else if (top === 'settings') closeSettings();   // 「+ 추가」 창이면 거래 입력창으로 돌아감
@@ -1554,31 +1541,18 @@ window.addEventListener('popstate', () => {
   else if (top === 'tx') closeTxModal();          // [취소]와 같음 (저장하지 않음)
   else if (top === 'sheet') dismissSheet();
   else if (state.tab !== 'calendar') document.querySelector('.tab[data-tab="calendar"]').click();
-  else askExit();
+  else armExit();
   // 여기서 칸을 다시 넣지 않음(누름 없이 넣으면 건너뛰어짐). 남은 칸으로 버티고, 다음에 화면을 누르면 다시 채움.
 });
-function askExit() {
-  exitAsking = true;
-  // 남은 막이 칸을 빼서 맨 처음 칸으로 → 확인 창에서 뒤로가기를 한 번 더 누르면 앱이 닫힘
+// 달력에서 뒤로가기: 남은 막이 칸을 빼서 맨 처음 칸으로 → 다음 뒤로가기는 그대로 앱 종료
+// (웹앱은 스스로 창을 닫을 수 없는 휴대폰이 많아 확인 창 대신 은행 앱처럼 안내만)
+// 안내가 사라진 뒤에도 화면을 누르기 전까지는 뒤로가기 한 번이면 종료된다(크롬 규칙상 누르지 않고는 칸을 다시 넣을 수 없음).
+function armExit() {
+  exitArmed = true;
   const k = guardLevel();
   if (k > 0) { goingToStart = true; try { history.go(-k); } catch { goingToStart = false; } }
-  $('#exitHint').textContent = '뒤로가기를 한 번 더 눌러도 종료됩니다.';
-  $('#exitModal').hidden = false;
-  state.modalOpen = true;
+  toast('뒤로가기를 한 번 더 누르면 종료됩니다.', 2000);
 }
-function stayInApp(e) {
-  exitAsking = false;
-  $('#exitModal').hidden = true;
-  state.modalOpen = false;
-  topUpGuards(e); // [계속 쓰기]를 누른 그 순간이라 크롬이 인정함
-}
-$('#exitStay').addEventListener('click', (e) => stayInApp(e));
-$('#exitModal').addEventListener('click', (e) => { if (e.target.id === 'exitModal') stayInApp(e); }); // 창 바깥 = 계속 쓰기
-$('#exitQuit').addEventListener('click', () => {
-  try { window.close(); } catch {}
-  // 휴대폰에 따라 웹앱이 스스로 창을 닫지 못하게 막혀 있음 → 뒤로가기로 종료하도록 안내
-  setTimeout(() => { if (!window.closed) $('#exitHint').textContent = '이 휴대폰에서는 앱이 스스로 닫히지 않습니다. 뒤로가기를 한 번 더 누르면 종료됩니다.'; }, 300);
-});
 
 // ---------- 사이드바 배치: 너비 260~800, 띄우기/고정 (localStorage ledger-edu.layout.v1) ----------
 const LAYOUT_KEY = 'ledger-edu.layout.v1';
